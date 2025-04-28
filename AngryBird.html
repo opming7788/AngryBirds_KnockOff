@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>憤怒鳥</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        background-color: #f0f0f0;
+      }
+      canvas {
+        border: 1px solid #000;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="gameCanvas" width="1000" height="600"></canvas>
+
+    <script>
+      // 遊戲常量
+      const CANVAS_WIDTH = 1000;
+      const CANVAS_HEIGHT = 600;
+      const Ball_size = 100;
+      const Shell_size = 0.25 * Ball_size;
+      const VMax = 150;
+      const VMin = 50;
+      const gravity = 10;
+      const dt = 0.3;
+      const brickWidth = 50;
+      const brickHeight = 30;
+      const DELAY = 0.000001;
+
+      // 獲取Canvas和Context
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+
+      // 遊戲狀態變數
+      let gameStarted = false;
+      let bricks = [];
+      let Score = 0;
+      let elapsed_time = 0;
+      let start_time;
+      let Time_Text;
+      let Score_Text;
+      let bricks_num = 0;
+      let AngryBird_Wasted = 0;
+      let trunk, grove;
+      let gameObjects = [];
+
+      // Canvas繪圖類模擬Python的Canvas類
+      class CanvasHelper {
+        constructor(canvas, ctx) {
+          this.canvas = canvas;
+          this.ctx = ctx;
+          this.objects = {};
+          this.nextId = 0;
+          this.mouseX = 0;
+          this.mouseY = 0;
+          this.lastClick = null;
+
+          // 設置滑鼠移動監聽
+          canvas.addEventListener("mousemove", (e) => {
+            const rect = canvas.getBoundingClientRect();
+            this.mouseX = e.clientX - rect.left;
+            this.mouseY = e.clientY - rect.top;
+          });
+
+          // 設置滑鼠點擊監聽
+          canvas.addEventListener("click", (e) => {
+            const rect = canvas.getBoundingClientRect();
+            this.lastClick = {
+              x: e.clientX - rect.left,
+              y: e.clientY - rect.top,
+            };
+          });
+        }
+
+        // 清除Canvas
+        clear() {
+          this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+          this.objects = {};
+          this.nextId = 0;
+        }
+
+        // 創建矩形
+        create_rectangle(x1, y1, x2, y2, color) {
+          const id = this.nextId++;
+          this.objects[id] = {
+            type: "rectangle",
+            x: x1,
+            y: y1,
+            width: x2 - x1,
+            height: y2 - y1,
+            color: color,
+            outlineColor: "black",
+          };
+          this._draw_object(id);
+          return id;
+        }
+
+        // 創建橢圓
+        create_oval(x1, y1, x2, y2, color) {
+          const id = this.nextId++;
+          this.objects[id] = {
+            type: "oval",
+            x: (x1 + x2) / 2,
+            y: (y1 + y2) / 2,
+            radiusX: Math.abs(x2 - x1) / 2,
+            radiusY: Math.abs(y2 - y1) / 2,
+            color: color,
+          };
+          this._draw_object(id);
+          return id;
+        }
+
+        // 創建文本
+        create_text(x, y, options) {
+          const id = this.nextId++;
+          this.objects[id] = {
+            type: "text",
+            x: x,
+            y: y,
+            font: options.font || "Arial",
+            font_size: options.font_size || 16,
+            text: options.text || "",
+            color: options.color || "black",
+          };
+          this._draw_object(id);
+          return id;
+        }
+
+        // 創建線段
+        create_line(x1, y1, x2, y2, color) {
+          const id = this.nextId++;
+          this.objects[id] = {
+            type: "line",
+            x1: x1,
+            y1: y1,
+            x2: x2,
+            y2: y2,
+            color: color,
+          };
+          this._draw_object(id);
+          return id;
+        }
+
+        // 創建多邊形
+        create_polygon(points, options) {
+          const id = this.nextId++;
+          this.objects[id] = {
+            type: "polygon",
+            points: points,
+            color: options.color || "black",
+          };
+          this._draw_object(id);
+          return id;
+        }
+
+        // 移動物件
+        move(id, dx, dy) {
+          const obj = this.objects[id];
+          if (!obj) return;
+
+          if (obj.type === "rectangle" || obj.type === "text") {
+            obj.x += dx;
+            obj.y += dy;
+          } else if (obj.type === "oval") {
+            obj.x += dx;
+            obj.y += dy;
+          } else if (obj.type === "line") {
+            obj.x1 += dx;
+            obj.y1 += dy;
+            obj.x2 += dx;
+            obj.y2 += dy;
+          } else if (obj.type === "polygon") {
+            for (let i = 0; i < obj.points.length; i += 2) {
+              obj.points[i] += dx;
+              obj.points[i + 1] += dy;
+            }
+          }
+          this._draw_all();
+        }
+
+        // 刪除物件
+        delete(id) {
+          if (this.objects[id]) {
+            delete this.objects[id];
+            this._draw_all();
+          }
+        }
+
+        // 設置輪廓顏色
+        set_outline_color(id, options) {
+          const obj = this.objects[id];
+          if (obj) {
+            obj.outlineColor = options.color || "black";
+            this._draw_all();
+          }
+        }
+
+        // 獲取左上角x座標
+        get_left_x(id) {
+          const obj = this.objects[id];
+          if (!obj) return 0;
+
+          if (obj.type === "rectangle") {
+            return obj.x;
+          } else if (obj.type === "oval") {
+            return obj.x - obj.radiusX;
+          }
+          return 0;
+        }
+
+        // 獲取頂部y座標
+        get_top_y(id) {
+          const obj = this.objects[id];
+          if (!obj) return 0;
+
+          if (obj.type === "rectangle") {
+            return obj.y;
+          } else if (obj.type === "oval") {
+            return obj.y - obj.radiusY;
+          }
+          return 0;
+        }
+
+        // 獲取滑鼠x座標
+        get_mouse_x() {
+          return this.mouseX;
+        }
+
+        // 獲取滑鼠y座標
+        get_mouse_y() {
+          return this.mouseY;
+        }
+
+        // 獲取最後一次點擊
+        get_last_click() {
+          const click = this.lastClick;
+          this.lastClick = null;
+          return click;
+        }
+
+        // 等待點擊
+        wait_for_click() {
+          return new Promise((resolve) => {
+            const checkClick = () => {
+              if (this.lastClick) {
+                const click = this.lastClick;
+                this.lastClick = null;
+                resolve(click);
+              } else {
+                requestAnimationFrame(checkClick);
+              }
+            };
+            checkClick();
+          });
+        }
+
+        // 繪製單個物件
+        _draw_object(id) {
+          const obj = this.objects[id];
+          if (!obj) return;
+
+          this.ctx.save();
+
+          if (obj.type === "rectangle") {
+            this.ctx.fillStyle = obj.color;
+            this.ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+            if (obj.outlineColor) {
+              this.ctx.strokeStyle = obj.outlineColor;
+              this.ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
+            }
+          } else if (obj.type === "oval") {
+            this.ctx.beginPath();
+            this.ctx.ellipse(
+              obj.x,
+              obj.y,
+              obj.radiusX,
+              obj.radiusY,
+              0,
+              0,
+              Math.PI * 2
+            );
+            this.ctx.fillStyle = obj.color;
+            this.ctx.fill();
+          } else if (obj.type === "text") {
+            this.ctx.font = `${obj.font_size}px ${obj.font}`;
+            this.ctx.fillStyle = obj.color;
+            this.ctx.fillText(obj.text, obj.x, obj.y + obj.font_size); // 調整y位置使文本對齊
+          } else if (obj.type === "line") {
+            this.ctx.beginPath();
+            this.ctx.moveTo(obj.x1, obj.y1);
+            this.ctx.lineTo(obj.x2, obj.y2);
+            this.ctx.strokeStyle = obj.color;
+            this.ctx.stroke();
+          } else if (obj.type === "polygon") {
+            this.ctx.beginPath();
+            this.ctx.moveTo(obj.points[0], obj.points[1]);
+            for (let i = 2; i < obj.points.length; i += 2) {
+              this.ctx.lineTo(obj.points[i], obj.points[i + 1]);
+            }
+            this.ctx.closePath();
+            this.ctx.fillStyle = obj.color;
+            this.ctx.fill();
+          }
+
+          this.ctx.restore();
+        }
+
+        // 重繪所有物件
+        _draw_all() {
+          this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+          for (let id in this.objects) {
+            this._draw_object(id);
+          }
+        }
+      }
+
+      // 創建Canvas助手
+      const canvasHelper = new CanvasHelper(canvas, ctx);
+
+      // 旋轉矩陣函數
+      function RotationMatrix(points, rotpoint, angle) {
+        const a = [];
+
+        function RotOrignMatx(x1, y1, angle) {
+          const x = x1 * Math.cos(angle) + y1 * Math.sin(angle);
+          const y = -x1 * Math.sin(angle) + y1 * Math.cos(angle);
+          return [x, y];
+        }
+
+        function MoveToOrign(x1, y1, x2, y2) {
+          return [x1 - x2, y1 - y2];
+        }
+
+        function BackToLocation(x1, y1, x2, y2) {
+          return [x1 + x2, y1 + y2];
+        }
+
+        for (let i = 0; i < points.length; i += 2) {
+          let [x1, y1] = MoveToOrign(
+            points[i],
+            points[i + 1],
+            rotpoint[0],
+            rotpoint[1]
+          );
+          [x1, y1] = RotOrignMatx(x1, y1, angle);
+          [x1, y1] = BackToLocation(x1, y1, rotpoint[0], rotpoint[1]);
+          a.push(x1);
+          a.push(y1);
+        }
+
+        return a;
+      }
+
+      // 減分動畫
+      function deduct_points_anim(canvas) {
+        let Sy = 0;
+        const animateDeduction = () => {
+          if (420 - Sy <= 310) return;
+
+          const deduct_Text = canvas.create_text(230, 420 - Sy, {
+            font: "Arial",
+            font_size: 28,
+            text: "-1",
+            color: "red",
+          });
+
+          Sy += 5;
+          setTimeout(() => {
+            canvas.delete(deduct_Text);
+            animateDeduction();
+          }, 10);
+        };
+
+        animateDeduction();
+      }
+
+      // 樹碰撞檢測
+      function Tree_collision(canvas, shell, trunk, dSx) {
+        const trunk_Lx = canvas.get_left_x(trunk);
+        const trunk_tpy = canvas.get_top_y(trunk);
+        const trunk_rigx = trunk_Lx + 1.4 * Shell_size;
+        const trunk_bty = trunk_tpy + 0.25 * CANVAS_HEIGHT;
+
+        const ball_Lx = canvas.get_left_x(shell);
+        const ball_tpy = canvas.get_top_y(shell);
+        const ball_rigx = ball_Lx + Shell_size;
+        const ball_bty = ball_tpy + Shell_size;
+
+        if (ball_rigx < trunk_Lx) {
+          return false;
+        }
+        if (ball_rigx >= trunk_Lx && ball_rigx - trunk_Lx <= Math.abs(dSx)) {
+          if (ball_bty > trunk_tpy) {
+            canvas.delete(shell);
+            return true;
+          }
+        }
+        return false;
+      }
+
+      // 創建樹
+      function Tree(canvas) {
+        const a = CANVAS_WIDTH * 0.5 * 0.75;
+        const b = 0.25 * CANVAS_HEIGHT;
+        const trunk = canvas.create_rectangle(
+          a - 0.7 * Shell_size,
+          CANVAS_HEIGHT - 1.4 * b,
+          a + 0.7 * Shell_size,
+          CANVAS_HEIGHT,
+          "#a0522d"
+        );
+        const grove = canvas.create_oval(
+          a - 2 * Shell_size,
+          CANVAS_HEIGHT - 1.5 * b,
+          a + 2 * Shell_size,
+          CANVAS_HEIGHT - 0.5 * b,
+          "green"
+        );
+        return [trunk, grove];
+      }
+
+      // 碰撞檢測
+      function collision(canvas, shell, bricks, dSx, dSy) {
+        for (let i = 0; i < bricks.length; i++) {
+          const brick = bricks[i];
+          const bricks_Lx = canvas.get_left_x(brick);
+          const bricks_tpy = canvas.get_top_y(brick);
+          const bricks_rigx = bricks_Lx + brickWidth;
+          const bricks_bty = bricks_tpy + brickHeight;
+
+          const ball_Lx = canvas.get_left_x(shell);
+          const ball_tpy = canvas.get_top_y(shell);
+          const ball_rigx = ball_Lx + Shell_size;
+          const ball_bty = ball_tpy + Shell_size;
+
+          if (ball_rigx < bricks_Lx) {
+            continue;
+          }
+          if (ball_bty < bricks_tpy) {
+            continue;
+          }
+
+          if (
+            ball_bty >= bricks_tpy &&
+            ball_bty - bricks_tpy <= Math.abs(dSy)
+          ) {
+            if (ball_Lx < bricks_rigx && ball_Lx > bricks_Lx) {
+              bricks.splice(i, 1);
+              canvas.delete(brick);
+              canvas.delete(shell);
+              return true;
+            }
+
+            if (ball_rigx < bricks_rigx && ball_rigx > bricks_Lx) {
+              bricks.splice(i, 1);
+              canvas.delete(brick);
+              canvas.delete(shell);
+              return true;
+            }
+          }
+
+          if (
+            ball_rigx >= bricks_Lx &&
+            ball_rigx - bricks_Lx <= Math.abs(dSx)
+          ) {
+            if (ball_tpy < bricks_bty && ball_tpy > bricks_tpy) {
+              bricks.splice(i, 1);
+              canvas.delete(brick);
+              canvas.delete(shell);
+              return true;
+            }
+            if (ball_bty < bricks_bty && ball_bty > bricks_tpy) {
+              bricks.splice(i, 1);
+              canvas.delete(brick);
+              canvas.delete(shell);
+              return true;
+            }
+          }
+        }
+        return false;
+      }
+
+      // 建造房子
+      function BuildHouse(canvas) {
+        const a = [];
+        for (let i = 1; i < 8; i++) {
+          for (let j = 1; j < 6; j++) {
+            const b = canvas.create_rectangle(
+              CANVAS_WIDTH - j * brickWidth,
+              CANVAS_HEIGHT - i * brickHeight,
+              CANVAS_WIDTH - (j - 1) * brickWidth,
+              CANVAS_HEIGHT - (i - 1) * brickHeight,
+              "yellow"
+            );
+            canvas.set_outline_color(b, { color: "red" });
+            a.push(b);
+          }
+        }
+        return a;
+      }
+
+      // 火力控制
+      async function FirePower(
+        canvas,
+        shell,
+        shellcenter,
+        ang,
+        start_time,
+        elapsed_time,
+        Time_Text
+      ) {
+        while (true) {
+          const current_time = Date.now() / 1000;
+          const elapsed_seconds =
+            Math.round((current_time - start_time) * 100) / 100;
+
+          if (elapsed_seconds > elapsed_time) {
+            elapsed_time = elapsed_seconds;
+            canvas.delete(Time_Text);
+
+            Time_Text = canvas.create_text(0, 0, {
+              font: "Arial",
+              font_size: 28,
+              text: "已用時間:" + String(elapsed_time).replace(".", "秒 "),
+              color: "red",
+            });
+          }
+
+          const x = canvas.get_mouse_x();
+          const y = canvas.get_mouse_y();
+          const Speed_arrow_length = 6 * Shell_size;
+
+          const xmin = shellcenter[0] + Shell_size * Math.cos(ang);
+          const xmax = xmin + Speed_arrow_length * Math.cos(ang);
+          const ymax = shellcenter[1] - Shell_size * Math.sin(ang);
+          const ymin = ymax - Speed_arrow_length * Math.sin(ang);
+
+          let lineA, VText;
+          let Vshell;
+
+          if (ang <= (45 * Math.PI) / 180) {
+            if (x >= xmin && x <= xmax) {
+              const y = shellcenter[1] + (x - shellcenter[0]) * Math.tan(-ang);
+
+              Vshell =
+                (((VMax - VMin) * (x - xmin)) / Speed_arrow_length) *
+                  Math.cos(ang) +
+                VMin;
+              lineA = canvas.create_line(
+                shellcenter[0],
+                shellcenter[1],
+                x,
+                y,
+                "red"
+              );
+              VText = canvas.create_text(x, y, {
+                font: "Arial",
+                font_size: 25,
+                text: "速度:" + Math.round(Vshell * 10) / 10,
+                color: "blue",
+              });
+            } else if (x > xmax) {
+              Vshell = VMax;
+              lineA = canvas.create_line(
+                xmax,
+                ymin,
+                shellcenter[0],
+                shellcenter[1],
+                "red"
+              );
+              VText = canvas.create_text(xmax, ymin, {
+                font: "Arial",
+                font_size: 25,
+                text: "速度:" + Math.round(Vshell * 10) / 10,
+                color: "blue",
+              });
+            } else {
+              Vshell = VMin;
+              lineA = canvas.create_line(
+                xmin,
+                ymax,
+                shellcenter[0],
+                shellcenter[1],
+                "red"
+              );
+              VText = canvas.create_text(xmin, ymax, {
+                font: "Arial",
+                font_size: 25,
+                text: "速度:" + Math.round(Vshell * 10) / 10,
+                color: "blue",
+              });
+            }
+          } else {
+            if (y >= ymin && y <= ymax) {
+              const x =
+                ((y - shellcenter[1]) * Math.cos(ang)) / Math.sin(-ang) +
+                shellcenter[0];
+              Vshell =
+                (((VMax - VMin) * (ymax - y)) / Speed_arrow_length) *
+                  Math.sin(ang) +
+                VMin;
+              lineA = canvas.create_line(
+                x,
+                y,
+                shellcenter[0],
+                shellcenter[1],
+                "red"
+              );
+              VText = canvas.create_text(x, y, {
+                font: "Arial",
+                font_size: 25,
+                text: "速度:" + Math.round(Vshell * 10) / 10,
+                color: "blue",
+              });
+            } else if (y < ymin) {
+              Vshell = VMax;
+              lineA = canvas.create_line(
+                xmax,
+                ymin,
+                shellcenter[0],
+                shellcenter[1],
+                "red"
+              );
+              VText = canvas.create_text(xmax, ymin, {
+                font: "Arial",
+                font_size: 25,
+                text: "速度:" + Math.round(Vshell * 10) / 10,
+                color: "blue",
+              });
+            } else {
+              Vshell = VMin;
+              lineA = canvas.create_line(
+                xmin,
+                ymax,
+                shellcenter[0],
+                shellcenter[1],
+                "red"
+              );
+              VText = canvas.create_text(xmin, ymax, {
+                font: "Arial",
+                font_size: 25,
+                text: "速度:" + Math.round(Vshell * 10) / 10,
+                color: "blue",
+              });
+            }
+          }
+
+          // 等待一小段時間後刪除線和文字
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          canvas.delete(lineA);
+          canvas.delete(VText);
+
+          const click = canvas.get_last_click();
+          if (click !== null) {
+            canvas.delete(Time_Text);
+            return [Vshell, start_time, elapsed_time, Time_Text];
+          }
+        }
+      }
+
+      // 滑鼠瞄準
+      async function mouseFire(
+        canvas,
+        RotationMatrix,
+        start_time,
+        elapsed_time,
+        Time_Text
+      ) {
+        const p1 = [0.5 * Ball_size, CANVAS_HEIGHT - 0.125 * Ball_size];
+        const p2 = [1 * Ball_size, CANVAS_HEIGHT - 0.125 * Ball_size];
+        const p3 = [1 * Ball_size, CANVAS_HEIGHT + 0.125 * Ball_size];
+        const p4 = [0.5 * Ball_size, CANVAS_HEIGHT + 0.125 * Ball_size];
+        const pshell = [1 * Ball_size + 0.5 * Shell_size, CANVAS_HEIGHT];
+
+        const points = [p1[0], p1[1], p2[0], p2[1], p3[0], p3[1], p4[0], p4[1]];
+        const rotpoint = [0, CANVAS_HEIGHT];
+
+        while (true) {
+          const current_time = Date.now() / 1000;
+          const elapsed_seconds =
+            Math.round((current_time - start_time) * 100) / 100;
+
+          if (elapsed_seconds > elapsed_time) {
+            elapsed_time = elapsed_seconds;
+            canvas.delete(Time_Text);
+
+            Time_Text = canvas.create_text(0, 0, {
+              font: "Arial",
+              font_size: 28,
+              text: "已用時間:" + String(elapsed_time).replace(".", "秒 "),
+              color: "red",
+            });
+          }
+
+          let x = canvas.get_mouse_x();
+          let y = canvas.get_mouse_y();
+
+          x = x - rotpoint[0];
+          y = y - rotpoint[1];
+          const ang = Math.asin(Math.abs(y) / Math.sqrt(x ** 2 + y ** 2));
+          const a = RotationMatrix(points, rotpoint, ang);
+
+          const pshellTransfer = RotationMatrix(
+            [pshell[0], pshell[1]],
+            rotpoint,
+            ang
+          );
+
+          const barrel = canvas.create_polygon(a, { color: "red" });
+
+          await new Promise((resolve) => setTimeout(resolve, 1));
+
+          const click = canvas.get_last_click();
+          if (click !== null) {
+            const shell = canvas.create_oval(
+              pshellTransfer[0] - 0.5 * Shell_size,
+              pshellTransfer[1] - 0.5 * Shell_size,
+              pshellTransfer[0] + 0.5 * Shell_size,
+              pshellTransfer[1] + 0.5 * Shell_size,
+              "red"
+            );
+            canvas.delete(Time_Text);
+            return [
+              shell,
+              barrel,
+              pshellTransfer,
+              ang,
+              start_time,
+              elapsed_time,
+              Time_Text,
+            ];
+          }
+
+          canvas.delete(barrel);
+        }
+      }
+
+      // 主遊戲邏輯
+      async function gameLoop() {
+        // 初始化遊戲元素
+        let sky = canvasHelper.create_rectangle(
+          0,
+          0,
+          CANVAS_WIDTH,
+          0.85 * CANVAS_HEIGHT,
+          "#00caff"
+        );
+        let grass = canvasHelper.create_rectangle(
+          0,
+          0.85 * CANVAS_HEIGHT,
+          CANVAS_WIDTH,
+          CANVAS_HEIGHT,
+          "#25ff00"
+        );
+        let sun = canvasHelper.create_oval(300, 110, 400, 210, "yellow");
+        let cloud1 = canvasHelper.create_oval(330, 140, 430, 190, "white");
+        let cloud2 = canvasHelper.create_oval(250, 160, 350, 200, "white");
+        let cloud3 = canvasHelper.create_oval(330, 160, 450, 210, "white");
+        let cloud4 = canvasHelper.create_oval(290, 170, 390, 230, "white");
+        let cloud5 = canvasHelper.create_oval(550, 220, 650, 260, "white");
+        let cloud6 = canvasHelper.create_oval(60, 220, 150, 260, "white");
+        let cloud7 = canvasHelper.create_oval(110, 200, 220, 240, "white");
+
+        [trunk, grove] = Tree(canvasHelper);
+        canvasHelper.create_oval(
+          0 - 0.5 * Ball_size,
+          CANVAS_HEIGHT - 0.5 * Ball_size,
+          0.5 * Ball_size,
+          CANVAS_HEIGHT + 0.5 * Ball_size,
+          "red"
+        );
+        bricks = BuildHouse(canvasHelper);
+
+        Score = 0;
+        elapsed_time = 0;
+        Time_Text = canvasHelper.create_text(0, 0, {
+          font: "Arial",
+          font_size: 28,
+          text: "已用時間:" + elapsed_time,
+          color: "red",
+        });
+        Score_Text = canvasHelper.create_text(CANVAS_WIDTH / 2, 0, {
+          font: "Arial",
+          font_size: 28,
+          text: "得分:" + Score,
+          color: "black",
+        });
+
+        start_time = Date.now() / 1000;
+
+        bricks_num = 0;
+        AngryBird_Wasted = 0;
+
+        while (true) {
+          const [
+            shell,
+            barrel,
+            shellcenter,
+            ang,
+            new_start_time,
+            new_elapsed_time,
+            new_Time_Text,
+          ] = await mouseFire(
+            canvasHelper,
+            RotationMatrix,
+            start_time,
+            elapsed_time,
+            Time_Text
+          );
+          start_time = new_start_time;
+          elapsed_time = new_elapsed_time;
+          Time_Text = new_Time_Text;
+
+          const [
+            Vshell,
+            newer_start_time,
+            newer_elapsed_time,
+            newer_Time_Text,
+          ] = await FirePower(
+            canvasHelper,
+            shell,
+            shellcenter,
+            ang,
+            start_time,
+            elapsed_time,
+            Time_Text
+          );
+          start_time = newer_start_time;
+          elapsed_time = newer_elapsed_time;
+          Time_Text = newer_Time_Text;
+
+          const vx = Vshell * Math.cos(-ang);
+          const vy = Vshell * Math.sin(-ang);
+          let Sx = shellcenter[0];
+          let Sy = shellcenter[1];
+          const linecollector = [];
+
+          let n = 0;
+          let shellFlying = true;
+
+          const flyShell = () => {
+            if (!shellFlying) return;
+
+            const dSx = vx * dt;
+            const dSy = vy * dt + 0.5 * gravity * (2 * n + 1) * dt ** 2;
+            n += 1;
+            canvasHelper.move(shell, dSx, dSy);
+            const lineA = canvasHelper.create_line(
+              Sx,
+              Sy,
+              Sx + dSx,
+              Sy + dSy,
+              "red"
+            );
+            linecollector.push(lineA);
+
+            Sx += dSx;
+            Sy += dSy;
+
+            if (Sy > CANVAS_HEIGHT) {
+              for (let i of linecollector) {
+                canvasHelper.delete(i);
+              }
+              linecollector.length = 0;
+              shellFlying = false;
+              AngryBird_Wasted += 1;
+              return;
+            }
+
+            if (Tree_collision(canvasHelper, shell, trunk, dSx)) {
+              for (let i of linecollector) {
+                canvasHelper.delete(i);
+              }
+              linecollector.length = 0;
+              deduct_points_anim(canvasHelper);
+              Score = Score - 1;
+              canvasHelper.delete(Score_Text);
+              Score_Text = canvasHelper.create_text(CANVAS_WIDTH / 2, 0, {
+                font: "Arial",
+                font_size: 28,
+                text: "得分:" + Score,
+                color: "black",
+              });
+              shellFlying = false;
+              AngryBird_Wasted += 1;
+              return;
+            }
+
+            if (collision(canvasHelper, shell, bricks, dSx, dSy)) {
+              for (let i of linecollector) {
+                canvasHelper.delete(i);
+              }
+              linecollector.length = 0;
+              Score = Score + 1;
+              bricks_num += 1;
+              AngryBird_Wasted += 1;
+
+              if (bricks_num >= 35) {
+                shellFlying = false;
+                gameComplete();
+                return;
+              }
+
+              canvasHelper.delete(Score_Text);
+              Score_Text = canvasHelper.create_text(CANVAS_WIDTH / 2, 0, {
+                font: "Arial",
+                font_size: 28,
+                text: "得分:" + Score,
+                color: "black",
+              });
+              shellFlying = false;
+              return;
+            }
+
+            const current_time = Date.now() / 1000;
+            const elapsed_seconds =
+              Math.round((current_time - start_time) * 100) / 100;
+
+            if (elapsed_seconds > elapsed_time) {
+              elapsed_time = elapsed_seconds;
+              canvasHelper.delete(Time_Text);
+
+              Time_Text = canvasHelper.create_text(0, 0, {
+                font: "Arial",
+                font_size: 28,
+                text: "已用時間:" + String(elapsed_time).replace(".", "秒 "),
+                color: "red",
+              });
+            }
+
+            requestAnimationFrame(flyShell);
+          };
+
+          flyShell();
+
+          // 等待shell飛行結束
+          while (shellFlying) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+
+          if (bricks_num >= 35) {
+            break;
+          }
+
+          canvasHelper.delete(barrel);
+          canvasHelper.delete(shell);
+          canvasHelper.delete(Time_Text);
+        }
+      }
+
+      // 遊戲完成畫面
+      function gameComplete() {
+        canvasHelper.create_rectangle(
+          CANVAS_WIDTH / 3,
+          CANVAS_HEIGHT / 3,
+          (CANVAS_WIDTH * 2) / 3,
+          (CANVAS_HEIGHT * 2) / 3,
+          "yellow"
+        );
+        canvasHelper.create_text(
+          (CANVAS_WIDTH * 4) / 9 - 10,
+          CANVAS_HEIGHT / 3 + 10,
+          {
+            font: "Arial",
+            font_size: 28,
+            text: "遊戲結果",
+            color: "black",
+          }
+        );
+        canvasHelper.create_text(
+          CANVAS_WIDTH / 3 + 50,
+          (CANVAS_HEIGHT * 2) / 5 + 20,
+          {
+            font: "Arial",
+            font_size: 20,
+            text: "用時:" + elapsed_time + "秒",
+            color: "red",
+          }
+        );
+        canvasHelper.create_text(
+          CANVAS_WIDTH / 3 + 50,
+          (CANVAS_HEIGHT * 7) / 15 + 20,
+          {
+            font: "Arial",
+            font_size: 20,
+            text: "得分:" + Score,
+            color: "red",
+          }
+        );
+        canvasHelper.create_text(
+          CANVAS_WIDTH / 3 + 50,
+          (CANVAS_HEIGHT * 8) / 15 + 20,
+          {
+            font: "Arial",
+            font_size: 20,
+            text: "使用鳥數:" + AngryBird_Wasted,
+            color: "red",
+          }
+        );
+      }
+
+      // 開始遊戲
+      async function startGame() {
+        let enterText = canvasHelper.create_text(250, 200, {
+          font: "Arial",
+          font_size: 100,
+          text: "點擊開始",
+          color: "red",
+        });
+
+        await canvasHelper.wait_for_click();
+        canvasHelper.delete(enterText);
+
+        // 開始遊戲主循環
+        await gameLoop();
+      }
+
+      // 頁面加載完成後啟動遊戲
+      window.onload = function () {
+        startGame();
+      };
+    </script>
+  </body>
+</html>
